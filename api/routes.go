@@ -1,6 +1,8 @@
 package api
 
 import (
+	"blockhouse/api/handlers"
+	"blockhouse/api/middleware"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -11,13 +13,13 @@ func SetupRoutes() *mux.Router {
 	router := mux.NewRouter()
 
 	// Apply middlewares
-	router.Use(LoggingMiddleware)
-	router.Use(AuthMiddleware)
+	router.Use(middleware.LoggingMiddleware)
+	router.Use(middleware.AuthMiddleware)
 
 	// Define routes
-	router.HandleFunc("/stream/start", StartStreamHandler).Methods("POST")
-	router.HandleFunc("/stream/{stream_id}/send", SendDataHandler).Methods("POST")
-	router.HandleFunc("/stream/{stream_id}/results", GetResultsHandler).Methods("GET")
+	router.HandleFunc("/stream/start", handlers.StartStream).Methods("POST")
+	router.HandleFunc("/stream/{stream_id}/send", handlers.SendData).Methods("POST")
+	router.HandleFunc("/stream/{stream_id}/results", handlers.GetResults).Methods("GET")
 
 	// Placeholder route for testing
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

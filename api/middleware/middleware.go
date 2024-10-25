@@ -1,6 +1,7 @@
-package api
+package middleware
 
 import (
+	"log"
 	"net/http"
 )
 
@@ -16,9 +17,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 // LoggingMiddleware is a placeholder middleware for logging requests
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Placeholder for logging logic
-		// For now, it just prints a message
-		w.Write([]byte("Logging middleware placeholder\n"))
+		log.Println("Request received:", r.Method, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
