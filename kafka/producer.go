@@ -1,10 +1,30 @@
 package kafka
 
 import (
-	"fmt"
+	"context"
+	"log"
+
+	"github.com/segmentio/kafka-go"
 )
 
-// StartProducer is a placeholder function for initializing the Kafka producer
-func StartProducer() {
-	fmt.Println("Kafka producer placeholder")
+func ProduceMessage(topic string, message string) {
+	writer := kafka.Writer{
+		Addr:     kafka.TCP("localhost:9092"), // Default Redpanda port
+		Topic:    topic,
+		Balancer: &kafka.LeastBytes{},
+	}
+
+	err := writer.WriteMessages(context.Background(),
+		kafka.Message{
+			Key:   []byte("key"),
+			Value: []byte(message),
+		},
+	)
+
+	if err != nil {
+		log.Fatal("Failed to write message:", err)
+	}
+
+	log.Println("Message sent:", message)
+	writer.Close()
 }

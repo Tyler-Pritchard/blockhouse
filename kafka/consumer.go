@@ -1,10 +1,25 @@
 package kafka
 
 import (
-	"fmt"
+	"context"
+	"log"
+
+	"github.com/segmentio/kafka-go"
 )
 
-// StartConsumer is a placeholder function for initializing the Kafka consumer
-func StartConsumer() {
-	fmt.Println("Kafka consumer placeholder")
+func ConsumeMessages(topic string) {
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers: []string{"localhost:9092"},
+		Topic:   topic,
+		GroupID: "my-group",
+	})
+
+	for {
+		message, err := reader.ReadMessage(context.Background())
+		if err != nil {
+			log.Fatal("Failed to read message:", err)
+		}
+
+		log.Printf("Message received: %s", string(message.Value))
+	}
 }
