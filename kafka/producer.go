@@ -28,6 +28,7 @@ func CreateTopic(broker string, topic string, numPartitions int) error {
 	return nil
 }
 
+// ProduceMessage sends a simple message to a specific topic
 func ProduceMessage(topic string, message string) {
 	writer := kafka.Writer{
 		Addr:     kafka.TCP("localhost:9092"), // Default Redpanda port
@@ -62,8 +63,9 @@ func SendToKafka(streamID string, data map[string]interface{}) error {
 
 	// Initialize Kafka writer with the topic set as streamID
 	writer := kafka.NewWriter(kafka.WriterConfig{
-		Brokers: []string{"localhost:9092"},
-		Topic:   streamID,
+		Brokers:  []string{broker},
+		Topic:    streamID,
+		Balancer: &kafka.CRC32Balancer{},
 	})
 
 	// Convert data to JSON
