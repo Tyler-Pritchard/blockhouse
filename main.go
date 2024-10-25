@@ -16,10 +16,9 @@ func main() {
 	// Set up routes
 	router := api.SetupRoutes()
 
-	// Log that the server is starting
-	log.Println("Server is starting on port 8080...")
-
 	// Start the server
+	port := config.GetEnv("WEBSOCKET_PORT")
+	log.Println("Server is starting on port", port)
 	log.Fatal(http.ListenAndServe(":8080", router))
 
 	// Initialize Kafka topic
