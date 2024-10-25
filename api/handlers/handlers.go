@@ -5,15 +5,24 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 )
 
-// Handler to start a new stream
+// StartStream creates a new data stream and returns a unique stream_id
 func StartStream(w http.ResponseWriter, r *http.Request) {
-	// Placeholder response
-	response := map[string]string{"message": "Stream started"}
+	// Generate a unique stream ID
+	streamID := uuid.New().String()
+
+	// Prepare the response
+	response := map[string]string{
+		"stream_id": streamID,
+	}
+
+	// Encode the response as JSON and send it
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(response)
-	log.Println("StartStream endpoint hit")
 }
 
 // Handler to send data to an existing stream
