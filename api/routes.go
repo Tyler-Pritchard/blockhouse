@@ -20,6 +20,7 @@ func SetupRoutes() *mux.Router {
 	router.HandleFunc("/stream/start", handlers.StartStream).Methods("POST")
 	router.HandleFunc("/stream/{stream_id}/send", handlers.SendData).Methods("POST")
 	router.HandleFunc("/stream/{stream_id}/results", handlers.GetResults).Methods("GET")
+	router.HandleFunc("/ws/{stream_id}", handlers.StreamResults).Methods("GET")
 
 	// Placeholder route for testing
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

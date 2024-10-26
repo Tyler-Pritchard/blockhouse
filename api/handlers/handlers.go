@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 )
 
 // StartStream creates a new data stream and returns a unique stream_id
@@ -77,5 +78,44 @@ func GetResults(w http.ResponseWriter, r *http.Request) {
 		// Timeout if no message is received in 5 seconds
 		http.Error(w, "No data processed within timeout period", http.StatusGatewayTimeout)
 		log.Printf("Timeout waiting for processed data from stream %s", streamID)
+	}
+}
+
+// Set up a WebSocket upgrader
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+// StreamResults establishes a WebSocket connection to stream processed Kafka results in real-time
+func StreamResults(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	streamID := vars["stream_id"]
+
+	// Upgrade HTTP connection to WebSocket
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("Failed to set WebSocket upgrade:", err)
+		return
+	}
+	defer conn.Close()
+
+	// Create a channel to receive processed messages
+	resultChan := make(chan string)
+	defer close(resultChan)
+
+	// Start Kafka consumer in a goroutine to push data to the result channel
+	go kafka.ProcessMessages(streamID, resultChan)
+
+	// Listen to the result channel and send data to WebSocket
+	for result := range resultChan {
+		err := conn.WriteMessage(websocket.TextMessage, []byte(result))
+		if err != nil {
+			log.Println("Failed to send message over WebSocket:", err)
+			break
+		}
 	}
 }
