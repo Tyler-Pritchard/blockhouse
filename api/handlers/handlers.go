@@ -130,22 +130,26 @@ var upgrader = websocket.Upgrader{
 
 // StreamResults streams processed results over WebSocket
 func StreamResults(w http.ResponseWriter, r *http.Request) {
-	// Validate API key
-	if !validateAPIKey(r) {
+	// Check headers first, then fallback to query parameters if headers are empty
+	clientAPIKey := r.Header.Get("X-API-Key")
+	if clientAPIKey == "" {
+		clientAPIKey = r.URL.Query().Get("X-API-Key")
+	}
+
+	streamID := r.Header.Get("X-Stream-ID")
+	if streamID == "" {
+		streamID = r.URL.Query().Get("X-Stream-ID")
+	}
+
+	// Validate API key and stream ID
+	expectedAPIKey := os.Getenv("API_KEY")
+	if clientAPIKey != expectedAPIKey || streamID == "" {
+		log.Printf("Unauthorized WebSocket access attempt: missing or invalid API key, received: %s", clientAPIKey)
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
 
-	vars := mux.Vars(r)
-	streamID := vars["stream_id"]
-
-	clientStreamID := r.Header.Get("X-Stream-ID")
-	if clientStreamID != streamID {
-		log.Printf("Forbidden WebSocket access attempt: stream %s with ID %s", streamID, clientStreamID)
-		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
-		return
-	}
-
+	// Proceed with WebSocket upgrade and message handling as usual
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("WebSocket upgrade failed:", err)
@@ -160,7 +164,7 @@ func StreamResults(w http.ResponseWriter, r *http.Request) {
 
 	for result := range resultChan {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(result)); err != nil {
-			log.Println("WebSocket send failed:", err)
+			log.Println("Failed to send message over WebSocket:", err)
 			break
 		}
 	}
