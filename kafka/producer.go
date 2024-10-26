@@ -61,28 +61,29 @@ func SendToKafka(streamID string, data map[string]interface{}) error {
 		return err
 	}
 
-	// Initialize Kafka writer with the topic set as streamID
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{broker},
 		Topic:    streamID,
-		Balancer: &kafka.CRC32Balancer{},
+		Balancer: &kafka.CRC32Balancer{}, // Keeps messages for the same key in the same partition
 	})
 
-	// Convert data to JSON
 	message, err := json.Marshal(data)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	// Write the message to Kafka
+	log.Printf("Sending message to Kafka topic %s: %s\n", streamID, message)
+
 	err = writer.WriteMessages(context.Background(), kafka.Message{
+		Key:   []byte(streamID),
 		Value: message,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to write message to Kafka: %w", err)
 	}
 
-	// Close the writer
+	log.Printf("Message sent to Kafka topic %s successfully.\n", streamID)
+
 	err = writer.Close()
 	if err != nil {
 		log.Println("Warning: failed to close Kafka writer:", err)

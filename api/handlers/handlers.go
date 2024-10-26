@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
@@ -52,13 +53,29 @@ func SendData(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "data accepted"})
 }
 
-// Handler to get results of a stream
+// GetResults starts the consumer and returns processed results for a stream
 func GetResults(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
 
-	// Placeholder response
-	response := map[string]string{"message": "Results retrieved for stream", "stream_id": streamID}
-	json.NewEncoder(w).Encode(response)
-	log.Println("GetResults endpoint hit for stream:", streamID)
+	// Channel to receive processed messages
+	resultChan := make(chan string)
+	defer close(resultChan)
+
+	// Start Kafka consumer in a goroutine
+	go kafka.ProcessMessages(streamID, resultChan)
+
+	// Set a timeout for receiving a processed message
+	select {
+	case result := <-resultChan:
+		// Send processed result to the client
+		response := map[string]string{"processed_result": result}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		log.Printf("Sent processed result for stream %s", streamID)
+	case <-time.After(5 * time.Second):
+		// Timeout if no message is received in 5 seconds
+		http.Error(w, "No data processed within timeout period", http.StatusGatewayTimeout)
+		log.Printf("Timeout waiting for processed data from stream %s", streamID)
+	}
 }
