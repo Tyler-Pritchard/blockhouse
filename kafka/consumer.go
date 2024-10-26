@@ -26,17 +26,20 @@ func ConsumeMessages(topic string) {
 	}
 }
 
-// ProcessMessages consumes messages from a Kafka topic and sends transformed data through a channel
+// ProcessMessages consumes messages from a Kafka topic, processes them, and sends transformed data through a channel
 func ProcessMessages(streamID string, resultChan chan<- string) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: []string{"localhost:9092"},
 		Topic:   streamID,
-		GroupID: "consumer-group-" + streamID, // Ensures each stream has its own consumer group
+		GroupID: "consumer-group-" + streamID,
 	})
-
 	defer reader.Close()
 
-	// Listen for messages and process them
+	// Counter to keep track of processed messages
+	messageCounter := 0
+
+	log.Printf("Started consumer for topic %s\n", streamID)
+
 	for {
 		msg, err := reader.ReadMessage(context.Background())
 		if err != nil {
@@ -44,11 +47,20 @@ func ProcessMessages(streamID string, resultChan chan<- string) {
 			break
 		}
 
-		// Perform a simple transformation (e.g., adding a timestamp)
-		transformedMessage := fmt.Sprintf("Processed at %s: %s", time.Now().Format(time.RFC3339), string(msg.Value))
-		log.Printf("Consumed message from stream %s: %s", streamID, transformedMessage)
+		// Increment the message counter
+		messageCounter++
 
-		// Send the processed message to the result channel
+		// Transform the message: add a timestamp and message count
+		transformedMessage := fmt.Sprintf(
+			"Message #%d - Processed at %s: %s",
+			messageCounter,
+			time.Now().Format(time.RFC3339),
+			string(msg.Value),
+		)
+
+		log.Printf("Consumed and transformed message from stream %s: %s", streamID, transformedMessage)
+
+		// Send the transformed message to the result channel
 		resultChan <- transformedMessage
 	}
 }
