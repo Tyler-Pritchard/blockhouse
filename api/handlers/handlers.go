@@ -33,23 +33,22 @@ func SendData(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
 
-	// Parse the JSON data
 	var data map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&data)
 	if err != nil {
+		log.Printf("Invalid JSON data for stream %s: %v", streamID, err)
 		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
 		return
 	}
 
-	// Send the data to Kafka (using the producer defined in producer.go)
 	err = kafka.SendToKafka(streamID, data)
 	if err != nil {
+		log.Printf("Failed to send data to Kafka for stream %s: %v", streamID, err)
 		http.Error(w, "Failed to send data to Kafka", http.StatusInternalServerError)
-		log.Println("Error producing to Kafka:", err)
 		return
 	}
 
-	// Respond with a success message
+	log.Printf("Data successfully sent to Kafka for stream %s", streamID)
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{"status": "data accepted"})
 }

@@ -33,24 +33,24 @@ func ProcessMessages(streamID string, resultChan chan<- string) {
 		Topic:   streamID,
 		GroupID: "consumer-group-" + streamID,
 	})
-	defer reader.Close()
+	defer func() {
+		if err := reader.Close(); err != nil {
+			log.Printf("Error closing Kafka reader for topic %s: %v", streamID, err)
+		}
+	}()
 
-	// Counter to keep track of processed messages
 	messageCounter := 0
 
-	log.Printf("Started consumer for topic %s\n", streamID)
+	log.Printf("Started consumer for topic %s", streamID)
 
 	for {
 		msg, err := reader.ReadMessage(context.Background())
 		if err != nil {
-			log.Printf("Error reading message from Kafka: %v\n", err)
+			log.Printf("Error reading message from Kafka for topic %s: %v", streamID, err)
 			break
 		}
 
-		// Increment the message counter
 		messageCounter++
-
-		// Transform the message: add a timestamp and message count
 		transformedMessage := fmt.Sprintf(
 			"Message #%d - Processed at %s: %s",
 			messageCounter,
@@ -58,9 +58,7 @@ func ProcessMessages(streamID string, resultChan chan<- string) {
 			string(msg.Value),
 		)
 
-		log.Printf("Consumed and transformed message from stream %s: %s", streamID, transformedMessage)
-
-		// Send the transformed message to the result channel
+		log.Printf("Successfully consumed message from topic %s: %s", streamID, transformedMessage)
 		resultChan <- transformedMessage
 	}
 }

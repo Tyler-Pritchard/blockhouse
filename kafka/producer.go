@@ -53,40 +53,42 @@ func ProduceMessage(topic string, message string) {
 
 // SendToKafka sends data to the specified Kafka topic
 func SendToKafka(streamID string, data map[string]interface{}) error {
-	broker := "localhost:9092" // Kafka broker address
+	broker := "localhost:9092"
 	topic := streamID
 
-	// Ensure the topic exists
 	if err := CreateTopic(broker, topic, 1); err != nil {
-		return err
+		log.Printf("Error creating topic %s: %v", topic, err)
+		return fmt.Errorf("failed to create topic: %w", err)
 	}
 
 	writer := kafka.NewWriter(kafka.WriterConfig{
 		Brokers:  []string{broker},
 		Topic:    streamID,
-		Balancer: &kafka.CRC32Balancer{}, // Keeps messages for the same key in the same partition
+		Balancer: &kafka.CRC32Balancer{},
 	})
 
 	message, err := json.Marshal(data)
 	if err != nil {
+		log.Printf("Error marshalling data for topic %s: %v", topic, err)
 		return fmt.Errorf("failed to marshal data: %w", err)
 	}
 
-	log.Printf("Sending message to Kafka topic %s: %s\n", streamID, message)
+	log.Printf("Producing message to topic %s: %s", topic, message)
 
 	err = writer.WriteMessages(context.Background(), kafka.Message{
 		Key:   []byte(streamID),
 		Value: message,
 	})
 	if err != nil {
+		log.Printf("Error writing message to Kafka for topic %s: %v", topic, err)
 		return fmt.Errorf("failed to write message to Kafka: %w", err)
 	}
 
-	log.Printf("Message sent to Kafka topic %s successfully.\n", streamID)
+	log.Printf("Successfully produced message to topic %s", topic)
 
-	err = writer.Close()
-	if err != nil {
-		log.Println("Warning: failed to close Kafka writer:", err)
+	if err = writer.Close(); err != nil {
+		log.Printf("Error closing Kafka writer for topic %s: %v", topic, err)
 	}
+
 	return nil
 }
