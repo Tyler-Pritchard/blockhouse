@@ -15,6 +15,7 @@ func SetupRoutes() *mux.Router {
 	// Apply middlewares
 	router.Use(middleware.LoggingMiddleware)
 	router.Use(middleware.AuthMiddleware)
+	router.Use(middleware.APIKeyAuthMiddleware)
 
 	// Define routes
 	router.HandleFunc("/stream/start", handlers.StartStream).Methods("POST")

@@ -19,3 +19,8 @@ func LoadEnv() {
 func GetEnv(key string) string {
 	return os.Getenv(key)
 }
+
+// GetAPIKey retrieves the API key from the environment
+func GetAPIKey() string {
+	return os.Getenv("API_KEY")
+}
