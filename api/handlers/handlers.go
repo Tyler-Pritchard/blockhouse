@@ -33,6 +33,13 @@ func SendData(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
 
+	clientStreamID := r.Header.Get("X-Stream-ID")
+	if clientStreamID != streamID {
+		log.Printf("Unauthorized access attempt: client tried to access stream %s with id %s\n", streamID, clientStreamID)
+		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
+		return
+	}
+
 	var data map[string]interface{}
 	err := json.NewDecoder(r.Body).Decode(&data)
 	if err != nil {
@@ -57,6 +64,14 @@ func SendData(w http.ResponseWriter, r *http.Request) {
 func GetResults(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
+
+	// Simulate stream ownership check (e.g., could use a token-based check here)
+	clientStreamID := r.Header.Get("X-Stream-ID") // Ensure clients pass their unique stream_id in headers
+	if clientStreamID != streamID {
+		log.Printf("Unauthorized access attempt: client tried to access stream %s with id %s\n", streamID, clientStreamID)
+		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
+		return
+	}
 
 	// Channel to receive processed messages
 	resultChan := make(chan string)
@@ -94,6 +109,14 @@ func StreamResults(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
 
+	// Validate that the client is using the correct stream_id in the header
+	clientStreamID := r.Header.Get("X-Stream-ID")
+	if clientStreamID != streamID {
+		log.Printf("Unauthorized WebSocket access attempt: client tried to access stream %s with id %s\n", streamID, clientStreamID)
+		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
+		return
+	}
+
 	// Upgrade HTTP connection to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -102,17 +125,13 @@ func StreamResults(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Create a channel to receive processed messages
 	resultChan := make(chan string)
 	defer close(resultChan)
 
-	// Start Kafka consumer in a goroutine to push data to the result channel
 	go kafka.ProcessMessages(streamID, resultChan)
 
-	// Listen to the result channel and send data to WebSocket
 	for result := range resultChan {
-		err := conn.WriteMessage(websocket.TextMessage, []byte(result))
-		if err != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(result)); err != nil {
 			log.Println("Failed to send message over WebSocket:", err)
 			break
 		}
