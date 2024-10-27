@@ -8,8 +8,32 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/time/rate"
 )
+
+var (
+	requestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "request_duration_seconds",
+			Help:    "Duration of HTTP requests in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"path", "method"},
+	)
+
+	rateLimitDenials = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "rate_limit_denials_total",
+			Help: "Total number of rate-limited requests denied",
+		},
+	)
+)
+
+func init() {
+	// Register Prometheus metrics
+	prometheus.MustRegister(requestDuration, rateLimitDenials)
+}
 
 // AuthMiddleware uses the handlers' API key validation
 func AuthMiddleware(next http.Handler) http.Handler {
@@ -36,8 +60,12 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r)
 
 		// Log the completion of the request with method, path, and duration
+		duration := time.Since(startTime).Seconds()
 		log.Printf("Request completed: %s %s - Status: %d, Duration: %v",
-			r.Method, r.URL.Path, ww.statusCode, time.Since(startTime))
+			r.Method, r.URL.Path, ww.statusCode, duration)
+
+		// Record the duration to Prometheus metrics
+		requestDuration.WithLabelValues(r.URL.Path, r.Method).Observe(duration)
 	})
 }
 
@@ -120,6 +148,7 @@ func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 
 			// Deny request if rate limit exceeded
 			if !limiter.Allow() {
+				rateLimitDenials.Inc() // Increment the rate limit denial counter
 				http.Error(w, "Too many requests", http.StatusTooManyRequests)
 				return
 			}

@@ -8,7 +8,38 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+var (
+	requestCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "api_requests_total",
+			Help: "Total number of requests to the API",
+		},
+		[]string{"endpoint", "method"},
+	)
+	requestDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "api_request_duration_seconds",
+			Help:    "Duration of API requests",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"endpoint"},
+	)
+	kafkaMessageCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "kafka_messages_total",
+			Help: "Total number of messages processed by Kafka",
+		},
+	)
+)
+
+func init() {
+	prometheus.MustRegister(requestCount, requestDuration, kafkaMessageCount)
+}
 
 func main() {
 	// Load environment variables
@@ -16,6 +47,9 @@ func main() {
 
 	// Set up routes
 	router := api.SetupRoutes()
+
+	// Add Prometheus metrics handler
+	router.Handle("/metrics", promhttp.Handler())
 
 	// Initialize rate limiter: 10 requests per second with a burst capacity of 20
 	rateLimiter := middleware.NewRateLimiter(10, 20)

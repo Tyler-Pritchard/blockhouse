@@ -8,13 +8,36 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/segmentio/kafka-go"
 )
 
 var (
 	topicConnOnce sync.Once
 	topicConn     *kafka.Conn
+
+	// Define Prometheus metrics
+	kafkaMessageCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "kafka_message_count",
+			Help: "Total number of messages sent to Kafka",
+		},
+		[]string{"topic"},
+	)
+	kafkaMessageDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "kafka_message_duration_seconds",
+			Help:    "Duration of Kafka message production",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"topic"},
+	)
 )
+
+func init() {
+	// Register Prometheus metrics
+	prometheus.MustRegister(kafkaMessageCount, kafkaMessageDuration)
+}
 
 // getKafkaConnection creates or reuses a Kafka connection for topic operations
 func getKafkaConnection(broker string) (*kafka.Conn, error) {
@@ -75,6 +98,9 @@ func getKafkaWriter(topic string) *kafka.Writer {
 func ProduceMessage(topic, message string) {
 	writer := getKafkaWriter(topic)
 
+	// Start timer for duration metric
+	start := time.Now()
+
 	// Use a timeout context to avoid indefinite blocking
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -87,6 +113,11 @@ func ProduceMessage(topic, message string) {
 		log.Printf("Error writing message to topic %s: %v", topic, err)
 		return
 	}
+
+	// Update Prometheus metrics
+	duration := time.Since(start).Seconds()
+	kafkaMessageCount.WithLabelValues(topic).Inc()
+	kafkaMessageDuration.WithLabelValues(topic).Observe(duration)
 
 	log.Println("Message sent:", message)
 }
@@ -105,6 +136,9 @@ func SendToKafka(streamID string, data map[string]interface{}) error {
 
 	log.Printf("Producing message to topic %s: %s", topic, message)
 
+	// Start timer for duration metric
+	start := time.Now()
+
 	// Use context with timeout to avoid indefinite blocking
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -117,6 +151,11 @@ func SendToKafka(streamID string, data map[string]interface{}) error {
 		log.Printf("Error writing message to Kafka for topic %s: %v", topic, err)
 		return fmt.Errorf("failed to write message to Kafka: %w", err)
 	}
+
+	// Update Prometheus metrics
+	duration := time.Since(start).Seconds()
+	kafkaMessageCount.WithLabelValues(topic).Inc()
+	kafkaMessageDuration.WithLabelValues(topic).Observe(duration)
 
 	log.Printf("Successfully produced message to topic %s", topic)
 	return nil
