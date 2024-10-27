@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // AuthMiddleware uses the handlers' API key validation
@@ -76,4 +78,52 @@ func APIKeyAuthMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// RateLimiter holds a rate limiter for each client
+type RateLimiter struct {
+	limiters map[string]*rate.Limiter
+	mu       sync.Mutex
+	rate     rate.Limit
+	burst    int
+}
+
+// NewRateLimiter initializes a new RateLimiter
+func NewRateLimiter(r rate.Limit, b int) *RateLimiter {
+	return &RateLimiter{
+		limiters: make(map[string]*rate.Limiter),
+		rate:     r,
+		burst:    b,
+	}
+}
+
+// getLimiter retrieves or creates a rate limiter for a specific client
+func (rl *RateLimiter) getLimiter(clientIP string) *rate.Limiter {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	limiter, exists := rl.limiters[clientIP]
+	if !exists {
+		limiter = rate.NewLimiter(rl.rate, rl.burst)
+		rl.limiters[clientIP] = limiter
+	}
+
+	return limiter
+}
+
+// RateLimitMiddleware applies rate limiting to each client based on their IP address
+func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			clientIP := r.RemoteAddr // Extract IP from headers if behind a proxy
+			limiter := rl.getLimiter(clientIP)
+
+			// Deny request if rate limit exceeded
+			if !limiter.Allow() {
+				http.Error(w, "Too many requests", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

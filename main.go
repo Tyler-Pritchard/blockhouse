@@ -2,6 +2,7 @@ package main
 
 import (
 	"blockhouse/api"
+	"blockhouse/api/middleware"
 	"blockhouse/config"
 	"blockhouse/kafka"
 	"log"
@@ -15,6 +16,14 @@ func main() {
 
 	// Set up routes
 	router := api.SetupRoutes()
+
+	// Initialize rate limiter: 10 requests per second with a burst capacity of 20
+	rateLimiter := middleware.NewRateLimiter(10, 20)
+
+	// Apply middleware in order
+	router.Use(middleware.LoggingMiddleware)                // Logs all requests
+	router.Use(middleware.AuthMiddleware)                   // Validates the API key
+	router.Use(middleware.RateLimitMiddleware(rateLimiter)) // Throttles excessive requests
 
 	// Start the server
 	port := config.GetEnv("WEBSOCKET_PORT")
