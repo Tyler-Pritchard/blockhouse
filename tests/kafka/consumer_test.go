@@ -8,20 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestProcessMessages verifies message processing from Kafka
+// TestProcessMessages verifies that messages from Kafka are processed as expected
 func TestProcessMessages(t *testing.T) {
 	streamID := "test-stream-id"
-	resultChan := make(chan string, 1)
+	resultChan := make(chan string, 1) // Buffered channel for message processing
 
-	// Simulate Kafka message
-	go func() {
-		kafka.ProcessMessages(streamID, resultChan)
-	}()
+	// Start Kafka message processing in a goroutine
+	go kafka.ProcessMessages(streamID, resultChan)
 
+	// Wait for a message in resultChan or time out after 3 seconds
 	select {
 	case result := <-resultChan:
-		assert.Contains(t, result, "Processed", "Expected processed message format")
+		assert.Contains(t, result, "Processed", "Expected message to be in processed format")
 	case <-time.After(3 * time.Second):
-		t.Error("Timeout: message processing took too long")
+		t.Fatal("Test timed out: message processing took too long")
 	}
 }

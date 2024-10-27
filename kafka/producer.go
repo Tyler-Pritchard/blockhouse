@@ -13,10 +13,7 @@ import (
 )
 
 var (
-	topicConnOnce sync.Once
-	topicConn     *kafka.Conn
-
-	// Define Prometheus metrics
+	// Prometheus metrics for Kafka message tracking
 	kafkaMessageCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "kafka_message_count",
@@ -27,7 +24,7 @@ var (
 	kafkaMessageDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "kafka_message_duration_seconds",
-			Help:    "Duration of Kafka message production",
+			Help:    "Duration of Kafka message production in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"topic"},
@@ -35,11 +32,15 @@ var (
 )
 
 func init() {
-	// Register Prometheus metrics
 	prometheus.MustRegister(kafkaMessageCount, kafkaMessageDuration)
 }
 
-// getKafkaConnection creates or reuses a Kafka connection for topic operations
+var (
+	topicConnOnce sync.Once
+	topicConn     *kafka.Conn
+)
+
+// getKafkaConnection creates or retrieves a Kafka connection for topic operations.
 func getKafkaConnection(broker string) (*kafka.Conn, error) {
 	var err error
 	topicConnOnce.Do(func() {
@@ -51,20 +52,20 @@ func getKafkaConnection(broker string) (*kafka.Conn, error) {
 	return topicConn, nil
 }
 
-// CreateTopic creates a Kafka topic if it doesn't already exist
+// CreateTopic ensures a Kafka topic exists or creates it if missing.
 func CreateTopic(broker, topic string, numPartitions int) error {
 	conn, err := getKafkaConnection(broker)
 	if err != nil {
 		return fmt.Errorf("failed to obtain Kafka connection: %w", err)
 	}
 
-	// Check if the topic already exists to avoid redundant creation attempts
+	// Check for topic existence to avoid redundant creation
 	partitions, err := conn.ReadPartitions(topic)
 	if err == nil && len(partitions) > 0 {
-		return nil // Topic exists; no need to create
+		return nil
 	}
 
-	// Attempt to create the topic if it doesn't exist
+	// Create the topic if it doesn't already exist
 	err = conn.CreateTopics(kafka.TopicConfig{
 		Topic:             topic,
 		NumPartitions:     numPartitions,
@@ -73,16 +74,17 @@ func CreateTopic(broker, topic string, numPartitions int) error {
 	if err != nil {
 		return fmt.Errorf("failed to create Kafka topic: %w", err)
 	}
+	log.Printf("Topic %s created with %d partitions", topic, numPartitions)
 	return nil
 }
 
 var (
 	writerOnce    sync.Once
 	kafkaWriter   *kafka.Writer
-	brokerAddress = "localhost:9092" // set broker once
+	brokerAddress = "localhost:9092" // Default Kafka broker address
 )
 
-// getKafkaWriter initializes or returns a persistent Kafka writer
+// getKafkaWriter initializes or reuses a Kafka writer for message production.
 func getKafkaWriter(topic string) *kafka.Writer {
 	writerOnce.Do(func() {
 		kafkaWriter = kafka.NewWriter(kafka.WriterConfig{
@@ -94,35 +96,28 @@ func getKafkaWriter(topic string) *kafka.Writer {
 	return kafkaWriter
 }
 
-// ProduceMessage sends a simple message to a specific topic
+// ProduceMessage sends a text message to a specific Kafka topic.
 func ProduceMessage(topic, message string) {
 	writer := getKafkaWriter(topic)
-
-	// Start timer for duration metric
-	start := time.Now()
-
-	// Use a timeout context to avoid indefinite blocking
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := writer.WriteMessages(ctx, kafka.Message{
+	startTime := time.Now()
+
+	if err := writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte("key"),
 		Value: []byte(message),
-	})
-	if err != nil {
-		log.Printf("Error writing message to topic %s: %v", topic, err)
+	}); err != nil {
+		log.Printf("Failed to write message to topic %s: %v", topic, err)
 		return
 	}
 
-	// Update Prometheus metrics
-	duration := time.Since(start).Seconds()
-	kafkaMessageCount.WithLabelValues(topic).Inc()
-	kafkaMessageDuration.WithLabelValues(topic).Observe(duration)
-
-	log.Println("Message sent:", message)
+	// Log and record metrics
+	logMessageMetrics(topic, time.Since(startTime).Seconds())
+	log.Printf("Message sent to topic %s: %s", topic, message)
 }
 
-// SendToKafka sends data to the specified Kafka topic
+// SendToKafka marshals and sends structured data to the specified Kafka topic.
 func SendToKafka(streamID string, data map[string]interface{}) error {
 	topic := streamID
 	writer := getKafkaWriter(topic)
@@ -130,33 +125,31 @@ func SendToKafka(streamID string, data map[string]interface{}) error {
 	// Marshal data to JSON
 	message, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("Error marshalling data for topic %s: %v", topic, err)
-		return fmt.Errorf("failed to marshal data: %w", err)
+		return fmt.Errorf("failed to marshal data for topic %s: %w", topic, err)
 	}
+	log.Printf("Preparing message for topic %s: %s", topic, message)
 
-	log.Printf("Producing message to topic %s: %s", topic, message)
-
-	// Start timer for duration metric
-	start := time.Now()
-
-	// Use context with timeout to avoid indefinite blocking
+	// Set timeout and start timer for metrics
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	startTime := time.Now()
 
-	err = writer.WriteMessages(ctx, kafka.Message{
+	// Send message to Kafka
+	if err := writer.WriteMessages(ctx, kafka.Message{
 		Key:   []byte(streamID),
 		Value: message,
-	})
-	if err != nil {
-		log.Printf("Error writing message to Kafka for topic %s: %v", topic, err)
-		return fmt.Errorf("failed to write message to Kafka: %w", err)
+	}); err != nil {
+		return fmt.Errorf("failed to write message to Kafka for topic %s: %w", topic, err)
 	}
 
-	// Update Prometheus metrics
-	duration := time.Since(start).Seconds()
+	// Log and record metrics
+	logMessageMetrics(topic, time.Since(startTime).Seconds())
+	log.Printf("Message successfully sent to topic %s", topic)
+	return nil
+}
+
+// logMessageMetrics records message metrics to Prometheus.
+func logMessageMetrics(topic string, duration float64) {
 	kafkaMessageCount.WithLabelValues(topic).Inc()
 	kafkaMessageDuration.WithLabelValues(topic).Observe(duration)
-
-	log.Printf("Successfully produced message to topic %s", topic)
-	return nil
 }

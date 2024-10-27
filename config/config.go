@@ -7,20 +7,24 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// LoadEnv loads environment variables from .env file
+// LoadEnv loads environment variables from a .env file, logging an error if unsuccessful.
 func LoadEnv() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Error loading .env file")
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
 	}
 }
 
-// GetEnv retrieves the environment variable by key
+// GetEnv retrieves an environment variable by key.
+// Returns an empty string if the key does not exist.
 func GetEnv(key string) string {
-	return os.Getenv(key)
+	value := os.Getenv(key)
+	if value == "" {
+		log.Printf("Warning: Environment variable %s is not set or empty", key)
+	}
+	return value
 }
 
-// GetAPIKey retrieves the API key from the environment
+// GetAPIKey is a convenience function to retrieve the API key specifically.
 func GetAPIKey() string {
-	return os.Getenv("API_KEY")
+	return GetEnv("API_KEY")
 }

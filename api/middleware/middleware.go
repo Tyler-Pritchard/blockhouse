@@ -12,33 +12,34 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// Prometheus Metrics
 var (
+	// Tracks duration of HTTP requests
 	requestDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "request_duration_seconds",
+			Name:    "http_request_duration_seconds",
 			Help:    "Duration of HTTP requests in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"path", "method"},
 	)
 
+	// Counts the total rate limit denials
 	rateLimitDenials = prometheus.NewCounter(
 		prometheus.CounterOpts{
-			Name: "rate_limit_denials_total",
+			Name: "http_rate_limit_denials_total",
 			Help: "Total number of rate-limited requests denied",
 		},
 	)
 )
 
 func init() {
-	// Register Prometheus metrics
-	prometheus.MustRegister(requestDuration, rateLimitDenials)
+	prometheus.MustRegister(requestDuration, rateLimitDenials) // Register Prometheus metrics
 }
 
-// AuthMiddleware uses the handlers' API key validation
+// AuthMiddleware validates API key using handlers' validation function
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Call ValidateAPIKey from handlers
 		if !handlers.ValidateAPIKey(r) {
 			http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 			return
@@ -47,29 +48,25 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// LoggingMiddleware logs each incoming request with method, path, and response time.
+// LoggingMiddleware logs each request with method, path, status, and duration
 func LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
-
-		// Log the incoming request with method and URL path
 		log.Printf("Request received: %s %s", r.Method, r.URL.Path)
 
 		// Wrap ResponseWriter to capture status and response time
 		ww := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(ww, r)
 
-		// Log the completion of the request with method, path, and duration
+		// Calculate and log duration, then record in Prometheus metrics
 		duration := time.Since(startTime).Seconds()
-		log.Printf("Request completed: %s %s - Status: %d, Duration: %v",
+		log.Printf("Request completed: %s %s - Status: %d, Duration: %.5fs",
 			r.Method, r.URL.Path, ww.statusCode, duration)
-
-		// Record the duration to Prometheus metrics
 		requestDuration.WithLabelValues(r.URL.Path, r.Method).Observe(duration)
 	})
 }
 
-// statusWriter wraps http.ResponseWriter to capture the HTTP status code
+// statusWriter wraps http.ResponseWriter to capture HTTP status code for logging
 type statusWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -80,27 +77,26 @@ func (sw *statusWriter) WriteHeader(code int) {
 	sw.ResponseWriter.WriteHeader(code)
 }
 
-// Cached API key for efficiency
-var cachedAPIKey string
-var once sync.Once
-
-// loadAPIKey caches the API key from config at startup
-func loadAPIKey() {
-	cachedAPIKey = config.GetAPIKey()
-	if cachedAPIKey == "" {
-		log.Println("Warning: API_KEY is not set in the environment.")
-	}
-}
-
-// APIKeyAuthMiddleware validates the API key in the request header
+// APIKeyAuthMiddleware verifies the API key from the request header
 func APIKeyAuthMiddleware(next http.Handler) http.Handler {
-	once.Do(loadAPIKey) // Ensures the API key is loaded only once
+	var (
+		once         sync.Once
+		cachedAPIKey string
+	)
+
+	// Load and cache API key once
+	loadAPIKey := func() {
+		cachedAPIKey = config.GetAPIKey()
+		if cachedAPIKey == "" {
+			log.Println("Warning: API_KEY is not set in the environment.")
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(loadAPIKey)
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != cachedAPIKey {
 			log.Println("Unauthorized request: invalid or missing API key")
-			w.Header().Set("Content-Type", "application/json")
 			http.Error(w, `{"error": "Unauthorized: invalid or missing API key"}`, http.StatusUnauthorized)
 			return
 		}
@@ -108,7 +104,7 @@ func APIKeyAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RateLimiter holds a rate limiter for each client
+// RateLimiter manages rate limiting for each client
 type RateLimiter struct {
 	limiters map[string]*rate.Limiter
 	mu       sync.Mutex
@@ -116,7 +112,7 @@ type RateLimiter struct {
 	burst    int
 }
 
-// NewRateLimiter initializes a new RateLimiter
+// NewRateLimiter initializes a new RateLimiter instance with specified rate and burst limit
 func NewRateLimiter(r rate.Limit, b int) *RateLimiter {
 	return &RateLimiter{
 		limiters: make(map[string]*rate.Limiter),
@@ -125,7 +121,7 @@ func NewRateLimiter(r rate.Limit, b int) *RateLimiter {
 	}
 }
 
-// getLimiter retrieves or creates a rate limiter for a specific client
+// getLimiter retrieves or creates a rate limiter for a specific client IP
 func (rl *RateLimiter) getLimiter(clientIP string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -135,20 +131,18 @@ func (rl *RateLimiter) getLimiter(clientIP string) *rate.Limiter {
 		limiter = rate.NewLimiter(rl.rate, rl.burst)
 		rl.limiters[clientIP] = limiter
 	}
-
 	return limiter
 }
 
-// RateLimitMiddleware applies rate limiting to each client based on their IP address
+// RateLimitMiddleware applies rate limiting based on client IP and increments denial count on limit exceeded
 func RateLimitMiddleware(rl *RateLimiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			clientIP := r.RemoteAddr // Extract IP from headers if behind a proxy
+			clientIP := r.RemoteAddr // Adjust for proxy if needed
 			limiter := rl.getLimiter(clientIP)
 
-			// Deny request if rate limit exceeded
 			if !limiter.Allow() {
-				rateLimitDenials.Inc() // Increment the rate limit denial counter
+				rateLimitDenials.Inc()
 				http.Error(w, "Too many requests", http.StatusTooManyRequests)
 				return
 			}

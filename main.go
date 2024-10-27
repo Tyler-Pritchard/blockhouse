@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
+	// Define Prometheus metrics
 	requestCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "api_requests_total",
@@ -38,41 +40,53 @@ var (
 )
 
 func init() {
+	// Register metrics for monitoring
 	prometheus.MustRegister(requestCount, requestDuration, kafkaMessageCount)
 }
 
 func main() {
-	// Load environment variables
+	// Load environment configuration
 	config.LoadEnv()
 
-	// Set up routes
+	// Set up router with middleware and routes
+	router := setupRouter()
+
+	// Start Kafka consumer in a separate goroutine
+	initializeKafkaConsumer("stream_topic")
+
+	// Start the HTTP server
+	port := config.GetEnv("WEBSOCKET_PORT")
+	log.Printf("Server is starting on port %s", port)
+	log.Fatal(http.ListenAndServe(":"+port, router))
+}
+
+// setupRouter configures API routes, applies middleware, and sets up the Prometheus endpoint
+func setupRouter() *mux.Router {
 	router := api.SetupRoutes()
 
-	// Add Prometheus metrics handler
+	// Add Prometheus metrics endpoint
 	router.Handle("/metrics", promhttp.Handler())
 
-	// Initialize rate limiter: 10 requests per second with a burst capacity of 20
+	// Initialize rate limiter with a limit of 10 requests per second and burst capacity of 20
 	rateLimiter := middleware.NewRateLimiter(10, 20)
 
-	// Apply middleware in order
-	router.Use(middleware.LoggingMiddleware)                // Logs all requests
-	router.Use(middleware.AuthMiddleware)                   // Validates the API key
-	router.Use(middleware.RateLimitMiddleware(rateLimiter)) // Throttles excessive requests
+	// Apply middlewares in the preferred order
+	router.Use(
+		middleware.LoggingMiddleware,                // Logs incoming requests
+		middleware.AuthMiddleware,                   // Validates the API key
+		middleware.RateLimitMiddleware(rateLimiter), // Throttles excessive requests
+	)
 
-	// Start the server
-	port := config.GetEnv("WEBSOCKET_PORT")
-	log.Println("Server is starting on port", port)
-	log.Fatal(http.ListenAndServe(":8080", router))
+	return router
+}
 
-	// Initialize Kafka topic
-	topic := "stream_topic"
+// initializeKafkaConsumer starts a Kafka consumer to process messages in a separate goroutine
+func initializeKafkaConsumer(topic string) {
+	go kafka.ConsumeMessages(topic) // Start Kafka consumer
 
-	// Start the consumer in a goroutine to continuously consume messages
-	go kafka.ConsumeMessages(topic)
-
-	// Sleep for a few seconds to allow the consumer to start
+	// Allow the consumer to initialize before producing test messages
 	time.Sleep(2 * time.Second)
 
-	// Produce a message
+	// Produce a sample message for testing
 	kafka.ProduceMessage(topic, "Hello Redpanda!")
 }

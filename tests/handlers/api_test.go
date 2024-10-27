@@ -16,50 +16,53 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// Load environment variables before each test
+// loadEnv loads environment variables from .env file for testing
 func loadEnv(t *testing.T) {
+	t.Helper() // Marks this function as a helper to improve test output readability
+
 	absPath, err := filepath.Abs("../../.env")
 	if err != nil {
 		t.Fatalf("Failed to determine absolute path for .env file: %v", err)
 	}
 
-	err = godotenv.Load(absPath)
-	if err != nil {
+	if err = godotenv.Load(absPath); err != nil {
 		t.Fatalf("Error loading .env file from %s: %v", absPath, err)
 	}
-	fmt.Println("Loaded environment variables:", os.Getenv("API_KEY"))
+	fmt.Printf("Loaded environment variable API_KEY: %s\n", os.Getenv("API_KEY"))
 }
 
+// TestStartStreamHandler validates the creation of a new stream
 func TestStartStreamHandler(t *testing.T) {
 	loadEnv(t)
 
-	req, err := http.NewRequest("POST", "/stream/start", nil)
-	assert.Nil(t, err, "Expected no error creating the request")
+	req, err := http.NewRequest(http.MethodPost, "/stream/start", nil)
+	assert.NoError(t, err, "Failed to create POST request for /stream/start")
 
-	// Add API Key header for authorization
-	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
+	req.Header.Set("X-API-Key", os.Getenv("API_KEY")) // Set API Key for authorization
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(handlers.StartStream)
 
 	handler.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusCreated, rr.Code, "Expected 201 status code")
-	assert.Contains(t, rr.Body.String(), "stream_id", "Expected response to contain stream_id")
+	assert.Equal(t, http.StatusCreated, rr.Code, "Expected 201 status code for stream creation")
+	assert.Contains(t, rr.Body.String(), "stream_id", "Response should contain stream_id field")
 }
 
+// TestSendDataHandler validates sending data to an existing stream
 func TestSendDataHandler(t *testing.T) {
 	loadEnv(t)
-
 	router := api.SetupRoutes()
 
-	// Prepare JSON payload for the request
+	// Prepare JSON payload
 	payload := map[string]interface{}{"key": "value"}
-	payloadBytes, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", "/stream/test-stream-id/send", bytes.NewBuffer(payloadBytes))
-	assert.Nil(t, err, "Expected no error creating the request")
+	payloadBytes, err := json.Marshal(payload)
+	assert.NoError(t, err, "Failed to marshal payload for /stream/{stream_id}/send")
 
-	// Set headers for API Key and Stream ID
+	req, err := http.NewRequest(http.MethodPost, "/stream/test-stream-id/send", bytes.NewBuffer(payloadBytes))
+	assert.NoError(t, err, "Failed to create POST request for /stream/{stream_id}/send")
+
+	// Set necessary headers
 	req.Header.Set("X-API-Key", os.Getenv("API_KEY"))
 	req.Header.Set("X-Stream-ID", "test-stream-id")
 	req.Header.Set("Content-Type", "application/json")
@@ -67,6 +70,6 @@ func TestSendDataHandler(t *testing.T) {
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
-	assert.Equal(t, http.StatusAccepted, rr.Code, "Expected 202 status code")
-	assert.Contains(t, rr.Body.String(), "data accepted", "Expected response to confirm data acceptance")
+	assert.Equal(t, http.StatusAccepted, rr.Code, "Expected 202 status code for data sending")
+	assert.Contains(t, rr.Body.String(), "data accepted", "Response should confirm data acceptance")
 }
