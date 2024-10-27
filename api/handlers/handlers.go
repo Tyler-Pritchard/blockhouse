@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,15 +14,30 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Helper function to validate API key
-func validateAPIKey(r *http.Request) bool {
-	clientAPIKey := r.Header.Get("X-API-Key")
-	expectedAPIKey := os.Getenv("API_KEY")
-	if clientAPIKey == expectedAPIKey {
-		return true
+var (
+	once         sync.Once
+	cachedAPIKey string
+)
+
+// Cache API key from the environment once at startup
+func loadAPIKey() {
+	cachedAPIKey = os.Getenv("API_KEY")
+	if cachedAPIKey == "" {
+		log.Println("Warning: API_KEY is not set in the environment.")
 	}
-	log.Printf("Unauthorized access attempt: invalid or missing API key, received: %s", clientAPIKey)
-	return false
+}
+
+// Validate API key against cached value
+func validateAPIKey(r *http.Request) bool {
+	once.Do(loadAPIKey)
+
+	clientAPIKey := r.Header.Get("X-API-Key")
+	return clientAPIKey == cachedAPIKey
+}
+
+// Structure for response when creating a new stream
+type StreamResponse struct {
+	StreamID string `json:"stream_id"`
 }
 
 // StartStream creates a new data stream and returns a unique stream_id
@@ -32,90 +48,93 @@ func StartStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate unique stream ID and respond
 	streamID := uuid.New().String()
-
-	response := map[string]string{"stream_id": streamID}
+	response := StreamResponse{StreamID: streamID}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(response)
+
+	// Reuse json encoder
+	encoder := json.NewEncoder(w)
+	if err := encoder.Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
 }
 
-// SendData handles data for an existing stream
+// Structure for response when sending data to a stream
+type SendDataResponse struct {
+	Status string `json:"status"`
+}
+
+// SendData sends data to an existing Kafka stream
 func SendData(w http.ResponseWriter, r *http.Request) {
-	// Validate API key
 	if !validateAPIKey(r) {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
 
+	// Extract stream ID from URL
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
-
-	clientStreamID := r.Header.Get("X-Stream-ID")
-	if clientStreamID != streamID {
-		log.Printf("Forbidden: client attempted access to stream %s with stream ID %s", streamID, clientStreamID)
+	if clientStreamID := r.Header.Get("X-Stream-ID"); clientStreamID != streamID {
 		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
 		return
 	}
 
-	// Parse JSON payload
+	// Decode JSON payload
 	var data map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		log.Printf("Error decoding JSON for stream %s: %v", streamID, err)
-		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&data); err != nil || len(data) == 0 {
+		http.Error(w, "Invalid or missing JSON data", http.StatusBadRequest)
 		return
 	}
 
-	// Ensure data is not empty
-	if len(data) == 0 {
-		log.Printf("No data provided for stream %s", streamID)
-		http.Error(w, "No data to process", http.StatusBadRequest)
-		return
-	}
+	// Send data asynchronously to Kafka to avoid blocking
+	go func() {
+		if err := kafka.SendToKafka(streamID, data); err != nil {
+			log.Printf("Kafka error for stream %s: %v", streamID, err)
+		} else {
+			log.Printf("Data sent to Kafka for stream %s", streamID)
+		}
+	}()
 
-	// Send data to Kafka
-	if err := kafka.SendToKafka(streamID, data); err != nil {
-		log.Printf("Kafka error for stream %s: %v", streamID, err)
-		http.Error(w, "Failed to send data to Kafka", http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("Data sent to Kafka for stream %s", streamID)
+	// Respond immediately
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"status": "data accepted"})
+	json.NewEncoder(w).Encode(SendDataResponse{Status: "data accepted"})
 }
 
-// GetResults processes and returns results for a stream
+// GetResults retrieves and returns results for a stream
 func GetResults(w http.ResponseWriter, r *http.Request) {
-	// Validate API key
 	if !validateAPIKey(r) {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
 
+	// Extract stream ID from URL
 	vars := mux.Vars(r)
 	streamID := vars["stream_id"]
-
-	clientStreamID := r.Header.Get("X-Stream-ID")
-	if clientStreamID != streamID {
-		log.Printf("Forbidden: client attempted access to stream %s with stream ID %s", streamID, clientStreamID)
+	if clientStreamID := r.Header.Get("X-Stream-ID"); clientStreamID != streamID {
 		http.Error(w, "Forbidden: Access to this stream is restricted", http.StatusForbidden)
 		return
 	}
 
-	resultChan := make(chan string)
+	// Use buffered channel to handle results
+	resultChan := make(chan string, 5)
 	defer close(resultChan)
 
+	// Process messages asynchronously
 	go kafka.ProcessMessages(streamID, resultChan)
 
+	// Set timeout for waiting for results
 	select {
 	case result := <-resultChan:
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"processed_result": result})
-		log.Printf("Processed result sent for stream %s", streamID)
+		if _, err := w.Write([]byte(result)); err != nil {
+			log.Printf("Error sending response for stream %s: %v", streamID, err)
+		}
 	case <-time.After(5 * time.Second):
-		http.Error(w, "No data processed within timeout period", http.StatusGatewayTimeout)
-		log.Printf("Timeout on processed data for stream %s", streamID)
+		http.Error(w, "No data processed within timeout", http.StatusGatewayTimeout)
 	}
 }
 
@@ -123,14 +142,11 @@ func GetResults(w http.ResponseWriter, r *http.Request) {
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
 // StreamResults streams processed results over WebSocket
 func StreamResults(w http.ResponseWriter, r *http.Request) {
-	// Check headers first, then fallback to query parameters if headers are empty
 	clientAPIKey := r.Header.Get("X-API-Key")
 	if clientAPIKey == "" {
 		clientAPIKey = r.URL.Query().Get("X-API-Key")
@@ -142,14 +158,12 @@ func StreamResults(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate API key and stream ID
-	expectedAPIKey := os.Getenv("API_KEY")
-	if clientAPIKey != expectedAPIKey || streamID == "" {
-		log.Printf("Unauthorized WebSocket access attempt: missing or invalid API key, received: %s", clientAPIKey)
+	if clientAPIKey != cachedAPIKey || streamID == "" {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
 
-	// Proceed with WebSocket upgrade and message handling as usual
+	// Upgrade HTTP to WebSocket connection
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("WebSocket upgrade failed:", err)
@@ -157,15 +171,24 @@ func StreamResults(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	resultChan := make(chan string)
+	// Channel for processing results
+	resultChan := make(chan string, 5)
 	defer close(resultChan)
 
 	go kafka.ProcessMessages(streamID, resultChan)
 
-	for result := range resultChan {
-		if err := conn.WriteMessage(websocket.TextMessage, []byte(result)); err != nil {
-			log.Println("Failed to send message over WebSocket:", err)
-			break
+	// Stream results to WebSocket client
+	for {
+		select {
+		case result, ok := <-resultChan:
+			if !ok {
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(result)); err != nil {
+				return
+			}
+		case <-r.Context().Done():
+			return
 		}
 	}
 }
