@@ -28,7 +28,7 @@ func loadAPIKey() {
 }
 
 // Validate API key against cached value
-func validateAPIKey(r *http.Request) bool {
+func ValidateAPIKey(r *http.Request) bool {
 	once.Do(loadAPIKey)
 
 	clientAPIKey := r.Header.Get("X-API-Key")
@@ -43,7 +43,7 @@ type StreamResponse struct {
 // StartStream creates a new data stream and returns a unique stream_id
 func StartStream(w http.ResponseWriter, r *http.Request) {
 	// Validate API key
-	if !validateAPIKey(r) {
+	if !ValidateAPIKey(r) {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
@@ -69,7 +69,7 @@ type SendDataResponse struct {
 
 // SendData sends data to an existing Kafka stream
 func SendData(w http.ResponseWriter, r *http.Request) {
-	if !validateAPIKey(r) {
+	if !ValidateAPIKey(r) {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
@@ -106,7 +106,7 @@ func SendData(w http.ResponseWriter, r *http.Request) {
 
 // GetResults retrieves and returns results for a stream
 func GetResults(w http.ResponseWriter, r *http.Request) {
-	if !validateAPIKey(r) {
+	if !ValidateAPIKey(r) {
 		http.Error(w, "Unauthorized: invalid or missing API key", http.StatusUnauthorized)
 		return
 	}
